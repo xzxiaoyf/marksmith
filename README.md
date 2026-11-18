@@ -5,7 +5,9 @@
 名字取自 wordsmith（文字工匠）：Markdown 的锻造台。若想改名，只需改 `AppMetadata.swift`、`Package.swift`、`Info.plist`、`scripts/build-app.sh` 四处。
 
 ---
-
+## 二、功能对照
+![输入图片说明](%E6%88%AA%E5%B1%8F2026-11-18%2022.17.10.png)
+---
 ## 二、功能对照
 
 | 功能 | Marksmith 实现 |
