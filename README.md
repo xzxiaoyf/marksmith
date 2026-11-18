@@ -6,20 +6,6 @@
 
 ---
 
-## 一、为什么原来的 DMG 在这台机器上跑不起来
-
-| 项目 | 结论 |
-| --- | --- |
-| 本机 | macOS 26.7.3，**Intel x86_64**，Xcode 26.5 / Swift 6.3.2 |
-| 原项目 | [nateober/markdown-editor](https://github.com/nateober/markdown-editor) v1.1.0，只发布一个 `MarkdownEditor.dmg` |
-| 根因 | 原 `scripts/build-app.sh` 第 23 行把产物路径写死为 `.build/arm64-apple-macosx/release`，发布的 DMG 是**纯 arm64** 二进制；Rosetta 2 只能让 Intel 程序跑在 Apple Silicon 上，反之不行 |
-
-次要因素：DMG 只有一个未标注架构的产物，README 也只写 "macOS 14+"，容易让人误以为是系统版本问题。
-
-> 如果只想让原程序跑起来，其实把那行改成 `swift build -c release --show-bin-path` 取得真实路径、再用 `--arch x86_64`（或做 universal）重新打包即可。本项目按你的要求另起炉灶重写，并把这个坑从构建脚本里彻底去掉。
-
----
-
 ## 二、功能对照
 
 | 功能 | Marksmith 实现 |
