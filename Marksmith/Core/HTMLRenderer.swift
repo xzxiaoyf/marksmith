@@ -137,8 +137,14 @@ struct HTMLRenderer {
             let resolved = options.embedLocalImages
                 ? ImageResolver.resolve(safe, baseDirectory: options.baseDirectory)
                 : safe
-            let titleAttr = title.map { " title=\"\(HTML.attribute($0))\"" } ?? ""
-            return "<img src=\"\(HTML.attribute(resolved))\" alt=\"\(HTML.attribute(alt))\"\(titleAttr)>"
+            // A broken local path used to render as an unexplained empty box.
+            // Mark it so the preview can show a dashed placeholder + tooltip.
+            let missing = options.embedLocalImages && resolved == safe &&
+                ImageResolver.isMissingLocalImage(safe, baseDirectory: options.baseDirectory)
+            let titleValue = title ?? (missing ? "图片未找到：\(safe)" : nil)
+            let titleAttr = titleValue.map { " title=\"\(HTML.attribute($0))\"" } ?? ""
+            let missingAttr = missing ? " data-marksmith-missing=\"1\"" : ""
+            return "<img src=\"\(HTML.attribute(resolved))\" alt=\"\(HTML.attribute(alt))\"\(titleAttr)\(missingAttr)>"
 
         case .hardBreak:
             return "<br>\n"

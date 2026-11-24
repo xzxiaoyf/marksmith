@@ -3,6 +3,10 @@ import AppKit
 
 struct ContentView: View {
     @ObservedObject var document: MarksmithDocument
+    /// URL of THIS window's document, injected by `DocumentGroup`. It is `nil`
+    /// for a new, unsaved document. Every relative-path resolution (preview
+    /// images, exports, pasted-image `assets/`) derives from this value.
+    let documentURL: URL?
     @ObservedObject private var settings = AppSettings.shared
 
     @Environment(\.openDocument) private var openDocument
@@ -21,6 +25,10 @@ struct ContentView: View {
     @State private var cursor = CursorPosition()
     @State private var vimMode: VimMode = .normal
     @State private var debounceTask: Task<Void, Never>?
+    /// Base directory used by the most recent render. Lets the deferred
+    /// self-heal pass know a later URL-driven render already succeeded, so it
+    /// must not overwrite correct HTML with a stale, URL-less snapshot.
+    @State private var renderedFolder: URL?
 
     var body: some View {
         NavigationSplitView(columnVisibility: sidebarVisibility) {
@@ -37,6 +45,12 @@ struct ContentView: View {
             // window can never leave the editor empty.
             bridge.syncText(newValue)
             schedulePreviewUpdate(for: newValue)
+        }
+        .onChange(of: documentURL) { _, _ in
+            // A document URL can arrive after onAppear (opening from Finder),
+            // and it changes on Save As. Relative images must be re-embedded
+            // against the new folder even when the text itself did not change.
+            refreshPreview()
         }
         .onChange(of: settings.defaultViewModeRaw) { _, _ in viewMode = settings.defaultViewMode }
         .onChange(of: settings.vimModeEnabled) { _, enabled in
@@ -165,12 +179,11 @@ struct ContentView: View {
     }
 
     private var documentFolder: URL? {
-        NSDocumentController.shared.currentDocument?.fileURL?.deletingLastPathComponent()
+        ImageResolver.documentDirectory(for: documentURL)
     }
 
     private var documentTitle: String {
-        NSDocumentController.shared.currentDocument?
-            .fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled"
+        ImageResolver.documentTitle(for: documentURL)
     }
 
     private var focusedContext: FocusedDocumentContext {
@@ -208,6 +221,15 @@ struct ContentView: View {
         let editorBridge = bridge
         DispatchQueue.main.async { [weak editorBridge] in editorBridge?.flush() }
 
+        // Self-heal for the narrow window where SwiftUI has not yet exposed
+        // the document URL. The guard reads current @State, so if a URL-driven
+        // re-render already happened this pass becomes a no-op instead of
+        // overwriting correct HTML with a stale, URL-less snapshot.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard renderedFolder == nil else { return }
+            refreshPreview()
+        }
+
         if let pending = PendingFolderOpen.url {
             PendingFolderOpen.url = nil
             folderModel.load(pending)
@@ -216,8 +238,18 @@ struct ContentView: View {
     }
 
     private func renderPreview(_ markdown: String) -> String {
-        let options = HTMLRenderOptions(baseDirectory: documentFolder, embedLocalImages: true)
+        let folder = documentFolder
+        renderedFolder = folder
+        let options = HTMLRenderOptions(baseDirectory: folder, embedLocalImages: true)
         return HTMLRenderer(options: options).render(MarkdownParser().parse(markdown))
+    }
+
+    /// Re-renders with the current document text and URL, without capturing a
+    /// text/URL snapshot in a closure (the 1.2.1 import race was caused by
+    /// exactly that pattern).
+    private func refreshPreview() {
+        let html = renderPreview(document.text)
+        if html != previewHTML { previewHTML = html }
     }
 
     private func schedulePreviewUpdate(for text: String) {

@@ -6,7 +6,7 @@ enum AppMetadata {
     static let name = "Marksmith"
     static let displayName = "Marksmith"
     static let bundleIdentifier = "local.marksmith.Marksmith"
-    static let version = "1.2.1"
+    static let version = "1.2.2"
     static let resourceBundleName = "Marksmith_Marksmith"
     static let editorUTI = "net.daringfireball.markdown"
 }

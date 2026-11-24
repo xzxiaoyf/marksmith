@@ -282,10 +282,16 @@ final class ImportService {
     }
 
     /// Never silently discard unsaved work.
+    ///
+    /// `NSDocumentController.shared.currentDocument` is nil under SwiftUI's
+    /// DocumentGroup (measured while fixing 1.2.2), which silently disabled
+    /// this guard. `NSWindow.isDocumentEdited` is per-window and is maintained
+    /// by DocumentGroup, so ask the active window instead.
     private func confirmOverwriteIfEdited() -> Bool {
-        guard NSDocumentController.shared.currentDocument?.isDocumentEdited == true else {
-            return true
-        }
+        let edited = NSApp.keyWindow?.isDocumentEdited
+            ?? NSApp.mainWindow?.isDocumentEdited
+            ?? false
+        guard edited else { return true }
         let alert = NSAlert()
         alert.messageText = "当前文档有未保存的修改"
         alert.informativeText = "覆盖后这些内容将无法恢复。建议先保存，或选择「新建文档」/「追加到光标处」。"

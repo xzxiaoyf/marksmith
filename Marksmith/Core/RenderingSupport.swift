@@ -137,29 +137,117 @@ enum URLPolicy {
 /// Converts relative image paths to `data:` URIs so previews and exports are
 /// self-contained and do not depend on WKWebView sandbox file-access rules.
 enum ImageResolver {
-    static func resolve(_ source: String, baseDirectory: URL?) -> String {
-        guard !source.hasPrefix("data:"), !source.hasPrefix("http://"),
-              !source.hasPrefix("https://") else { return source }
-        guard let baseDirectory else { return source }
+    // MARK: - Per-window document identity
+    //
+    // Pure functions so the multi-window behaviour (each window resolves
+    // against its OWN document folder) can be unit tested without AppKit.
+
+    static func documentDirectory(for documentURL: URL?) -> URL? {
+        documentURL?.deletingLastPathComponent()
+    }
+
+    static func documentTitle(for documentURL: URL?) -> String {
+        documentURL?.deletingPathExtension().lastPathComponent ?? "Untitled"
+    }
+
+    // MARK: - data-URI cache
+    //
+    // A four-screenshot document already produces ~4 MB of HTML. Re-reading
+    // and re-encoding every PNG on each debounced keystroke is wasteful, so
+    // cache by path + size + mtime (editing the file invalidates the entry).
+    // NSCache is thread-safe; cost is the raw byte count, capped at 64 MB.
+
+    private static let cache: NSCache<NSString, NSString> = {
+        let value = NSCache<NSString, NSString>()
+        value.totalCostLimit = 64 * 1024 * 1024
+        return value
+    }()
+    private static let statsLock = NSLock()
+    private static var hits = 0
+    private static var misses = 0
+
+    static func clearCache() {
+        cache.removeAllObjects()
+        statsLock.lock()
+        hits = 0
+        misses = 0
+        statsLock.unlock()
+    }
+
+    static func cacheStatistics() -> (hits: Int, misses: Int) {
+        statsLock.lock()
+        defer { statsLock.unlock() }
+        return (hits, misses)
+    }
+
+    private static func recordHit() {
+        statsLock.lock()
+        hits += 1
+        statsLock.unlock()
+    }
+
+    private static func recordMiss() {
+        statsLock.lock()
+        misses += 1
+        statsLock.unlock()
+    }
+
+    /// Resolves a Markdown image destination to a local file URL.
+    /// Returns nil for remote / data URIs and when no base directory exists.
+    static func localFileURL(for source: String, baseDirectory: URL?) -> URL? {
+        guard let baseDirectory,
+              !source.hasPrefix("data:"),
+              !source.hasPrefix("data%3A"),
+              !source.hasPrefix("http://"), !source.hasPrefix("https://") else { return nil }
 
         let pathPart: String
         if source.hasPrefix("file://"), let url = URL(string: source), url.isFileURL {
             pathPart = url.path
         } else {
+            // Strip a fragment (#anchor) before decoding %20 and friends.
             let parts = source.split(separator: "#", maxSplits: 1)
-            let decoded = String(parts[0]).removingPercentEncoding ?? String(parts[0])
-            pathPart = decoded
+            let raw = String(parts[0])
+            pathPart = raw.removingPercentEncoding ?? raw
         }
-
-        let fileURL: URL
+        guard !pathPart.isEmpty else { return nil }
         if pathPart.hasPrefix("/") {
-            fileURL = URL(fileURLWithPath: pathPart)
-        } else {
-            fileURL = baseDirectory.appendingPathComponent(pathPart).standardizedFileURL
+            return URL(fileURLWithPath: pathPart).standardizedFileURL
         }
+        return baseDirectory.appendingPathComponent(pathPart).standardizedFileURL
+    }
+
+    /// True when a local image destination cannot be embedded: missing file,
+    /// directory, or zero-byte file. Remote, data and URL-less destinations
+    /// are deliberately NOT flagged.
+    static func isMissingLocalImage(_ source: String, baseDirectory: URL?) -> Bool {
+        guard let url = localFileURL(for: source, baseDirectory: baseDirectory) else {
+            return false
+        }
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber, size.int64Value > 0,
+              let type = attributes[.type] as? FileAttributeType, type != .typeDirectory else {
+            return true
+        }
+        return false
+    }
+
+    static func resolve(_ source: String, baseDirectory: URL?) -> String {
+        guard let fileURL = localFileURL(for: source, baseDirectory: baseDirectory),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let size = attributes[.size] as? NSNumber, size.int64Value > 0,
+              let modified = attributes[.modificationDate] as? Date else { return source }
+
+        let key = "\(fileURL.path)|\(size.int64Value)|\(modified.timeIntervalSince1970)"
+        if let cached = cache.object(forKey: key as NSString) {
+            recordHit()
+            return cached as String
+        }
+        recordMiss()
         guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else { return source }
-        let mime = mimeType(for: fileURL.pathExtension)
-        return "data:\(mime);base64,\(data.base64EncodedString())"
+        let uri = "data:\(mimeType(for: fileURL.pathExtension));base64,\(data.base64EncodedString())"
+        cache.setObject(uri as NSString, forKey: key as NSString,
+                        cost: min(Int(size.int64Value), Int.max))
+        return uri
     }
 
     static func mimeType(for pathExtension: String) -> String {
@@ -177,13 +265,8 @@ enum ImageResolver {
 
     /// Reads a local image for DOCX embedding. Returns nil for remote/data URLs.
     static func localImageData(_ source: String, baseDirectory: URL?) -> (Data, String)? {
-        guard let baseDirectory, !source.hasPrefix("data:"),
-              !source.hasPrefix("http://"), !source.hasPrefix("https://") else { return nil }
-        let decoded = source.removingPercentEncoding ?? source
-        let url = decoded.hasPrefix("/")
-            ? URL(fileURLWithPath: decoded)
-            : baseDirectory.appendingPathComponent(decoded).standardizedFileURL
-        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        guard let url = localFileURL(for: source, baseDirectory: baseDirectory),
+              let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
         let ext = url.pathExtension.lowercased()
         let contentType: String
         switch ext {

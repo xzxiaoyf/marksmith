@@ -205,15 +205,10 @@ private final class LoadCoordinator: NSObject, WKNavigationDelegate {
 final class ExportService {
     static let shared = ExportService()
 
-    /// Host window's document folder, used to resolve relative image paths.
-    static func currentDocumentFolder() -> URL? {
-        NSDocumentController.shared.currentDocument?.fileURL?.deletingLastPathComponent()
-    }
-
-    static func currentDocumentTitle() -> String {
-        NSDocumentController.shared.currentDocument?
-            .fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled"
-    }
+    // NOTE: do not add helpers based on NSDocumentController.shared
+    // .currentDocument here. Under SwiftUI's DocumentGroup it is commonly nil
+    // or points at another window; every export receives its own
+    // ExportContext (built by ContentView from that window's documentURL).
 
     func export(_ format: ExportFormat, context: ExportContext) {
         Task { @MainActor in
